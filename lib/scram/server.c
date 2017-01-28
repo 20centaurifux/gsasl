@@ -44,6 +44,7 @@
 #include "printer.h"
 #include "gc.h"
 #include "memxor.h"
+#include "hex.h"
 
 #define DEFAULT_SALT_BYTES 12
 #define SNONCE_ENTROPY_BYTES 18
@@ -313,15 +314,21 @@ _gsasl_scram_sha1_server_step (Gsasl_session * sctx,
 
 	{
 	  const char *p;
+	  char saltedpassword[20];
+
+	  memset(saltedpassword, 0, 20);
 
 	  /* Get StoredKey and ServerKey */
-	  if ((p = gsasl_property_get (sctx, GSASL_PASSWORD)))
+	  p = gsasl_property_get (sctx, GSASL_SCRAM_SALTED_PASSWORD);
+	  if (p && strlen (p) == 40 && hex_p (p))
+	    {
+	      sha1_hex_to_byte (saltedpassword, p);
+	    }
+	  else if ((p = gsasl_property_get (sctx, GSASL_PASSWORD)))
 	    {
 	      Gc_rc err;
 	      char *salt;
 	      size_t saltlen;
-	      char saltedpassword[20];
-	      char *clientkey;
 	      char *preppasswd;
 
 	      rc = gsasl_saslprep (p, 0, &preppasswd, NULL);
@@ -344,31 +351,35 @@ _gsasl_scram_sha1_server_step (Gsasl_session * sctx,
 	      gsasl_free (salt);
 	      if (err != GC_OK)
 		return GSASL_MALLOC_ERROR;
-
-	      /* ClientKey := HMAC(SaltedPassword, "Client Key") */
-#define CLIENT_KEY "Client Key"
-	      rc = gsasl_hmac_sha1 (saltedpassword, 20,
-				    CLIENT_KEY, strlen (CLIENT_KEY),
-				    &clientkey);
-	      if (rc != 0)
-		return rc;
-
-	      /* StoredKey := H(ClientKey) */
-	      rc = gsasl_sha1 (clientkey, 20, &state->storedkey);
-	      free (clientkey);
-	      if (rc != 0)
-		return rc;
-
-	      /* ServerKey := HMAC(SaltedPassword, "Server Key") */
-#define SERVER_KEY "Server Key"
-	      rc = gsasl_hmac_sha1 (saltedpassword, 20,
-				    SERVER_KEY, strlen (SERVER_KEY),
-				    &state->serverkey);
-	      if (rc != 0)
-		return rc;
 	    }
 	  else
-	    return GSASL_NO_PASSWORD;
+	    return GSASL_NO_PASSWORD;  
+
+	  {
+	    char *clientkey;
+
+	    /* ClientKey := HMAC(SaltedPassword, "Client Key") */
+#define CLIENT_KEY "Client Key"
+	    rc = gsasl_hmac_sha1 (saltedpassword, 20,
+				  CLIENT_KEY, strlen (CLIENT_KEY),
+				  &clientkey);
+	    if (rc != 0)
+	      return rc;
+
+	    /* StoredKey := H(ClientKey) */
+	    rc = gsasl_sha1 (clientkey, 20, &state->storedkey);
+	    free (clientkey);
+	    if (rc != 0)
+	      return rc;
+
+	    /* ServerKey := HMAC(SaltedPassword, "Server Key") */
+#define SERVER_KEY "Server Key"
+	    rc = gsasl_hmac_sha1 (saltedpassword, 20,
+				  SERVER_KEY, strlen (SERVER_KEY),
+				  &state->serverkey);
+	    if (rc != 0)
+	      return rc;
+	  }
 
 	  /* Compute AuthMessage */
 	  {
